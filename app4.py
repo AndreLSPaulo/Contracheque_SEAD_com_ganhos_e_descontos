@@ -309,6 +309,11 @@ def ajustar_descontos_por_pagina(df):
         group_ajustado = ajustar_descontos_uma_pagina(group)
         group_ajustado["PAGINA"] = page_number
         paginas_processadas.append(group_ajustado)
+
+    # Se nenhuma página foi processada, retorna o DataFrame original
+    if not paginas_processadas:
+        return df
+
     return pd.concat(paginas_processadas, ignore_index=True)
 
 
@@ -674,7 +679,8 @@ def main():
     glossary_terms = carregar_glossario(GLOSSARY_PATH)
 
     # Upload do PDF
-    uploaded_pdf = st.file_uploader("Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
+    uploaded_pdf = st.file_uploader(
+        "Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
 
     if uploaded_pdf is not None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
