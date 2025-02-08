@@ -167,7 +167,6 @@ def inserir_totais_na_coluna(df, col_valor):
     mask_especial = df_novo["DESCRIÇÃO"].isin(["Valor Total (R$)", "Em dobro (R$)"])
     if "DATA" in df_novo.columns:
         df_novo.loc[mask_especial, "DATA"] = ""
-    # === DIRETRIZ: Coluna 'COD' vazia para as linhas especiais ===
     if "COD" in df_novo.columns:
         df_novo.loc[mask_especial, "COD"] = ""
 
@@ -259,15 +258,29 @@ def encontrar_cabecalho(df):
 
 
 def ler_tabelas(pdf_path):
+    """
+    Tenta extrair tabelas do PDF usando Camelot.
+    Primeiro tenta com flavor 'lattice'. Se não encontrar nenhuma tabela,
+    tenta com flavor 'stream'.
+    """
     try:
         import camelot
-        return camelot.read_pdf(
+        tables = camelot.read_pdf(
             pdf_path,
             pages="all",
             flavor="lattice",
             strip_text=''
         )
-    except:
+        if len(tables) == 0:
+            tables = camelot.read_pdf(
+                pdf_path,
+                pages="all",
+                flavor="stream",
+                strip_text=''
+            )
+        return tables
+    except Exception as e:
+        st.error(f"Erro ao ler tabelas: {e}")
         return []
 
 
@@ -370,14 +383,10 @@ def formatar_valor_brl(us_string: str) -> str:
     Ex.: "465,578.00" -> "465.578,00"
     """
     try:
-        # 1) remove vírgula e ponto => vira "46557800"
-        # 2) /100 => float(465578)
-        # 3) f"{f:,.2f}" => "465,578.00"
-        # 4) replace -> "465.578,00"
         f = float(us_string.replace(",", "").replace(".", "")) / 100
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
-        return us_string  # se não conseguir converter, retorna original
+        return us_string
 
 
 class PDFRelatorio(FPDF):
@@ -401,7 +410,6 @@ class PDFRelatorio(FPDF):
         self.set_font('Arial', 'B', 14)
         self.cell(0, 8, self.titulo, border=False, ln=True, align='C')
         self.ln(3)
-
         self.set_font("Arial", "B", 10)
         self.set_fill_color(200, 220, 255)
         for col in self.colunas:
@@ -424,7 +432,6 @@ class PDFRelatorio(FPDF):
             descricao = str(row.get("DESCRIÇÃO", ""))
             is_especial = descricao in ["Valor Total (R$)", "Em dobro (R$)"]
 
-            # Se quiser destacar linhas especiais
             if is_especial and self.linhas_especiais:
                 self.set_font("Arial", "B", 11)
                 self.set_text_color(255, 0, 0)
@@ -435,11 +442,8 @@ class PDFRelatorio(FPDF):
             for col in self.colunas:
                 col_name = col["nome"]
                 valor = str(row.get(col_name, ""))
-
-                # Se for coluna de valores (GANHOS ou DESCONTOS), converter p/ PT-BR
                 if col_name in ["GANHOS", "DESCONTOS"] and valor.strip():
                     valor = formatar_valor_brl(valor)
-
                 self.cell(col["largura"], row_height, valor, border=1, align=col["alinhamento"])
             self.ln(row_height)
 
@@ -466,15 +470,11 @@ def salvar_em_pdf(
     Se inserir_totais=True: insere linhas de total/dobro, usando 'col_valor_soma'.
     Se linhas_especiais=True, destaca as linhas de total/dobro em vermelho.
     """
-    # Garante as colunas no DF
     for col_def in colunas_def:
         if col_def["nome"] not in dados.columns:
             dados[col_def["nome"]] = ""
 
     df_final = dados.copy()
-
-    # Se inserir_totais = True, insere linhas de soma/dobro
-    # (função já limpa "DATA" e agora também "COD" nessas linhas).
     if inserir_totais:
         df_final = inserir_totais_na_coluna(df_final, col_valor_soma)
 
@@ -495,10 +495,6 @@ def salvar_em_pdf(
 #      2) Ajuste final para PT-BR usando a função 'ajustar_valores_docx'
 ###############################################################################
 def to_en_us_string(val):
-    """
-    Tenta converter val para float e retorna no formato '123,456.78'
-    Caso não consiga converter, retorna o original como string.
-    """
     try:
         f = float(str(val).replace(",", "."))
         return "{:,.2f}".format(f)
@@ -512,14 +508,7 @@ def df_to_docx_bytes(
         inserir_totais=False,
         col_valor_soma="DESCONTOS"
 ) -> bytes:
-    """
-    Gera DOCX em paisagem, com valores no formato "123,456.78".
-    Após gerar o DOCX, faremos a correção para PT-BR com `ajustar_valores_docx`.
-    Se inserir_totais=True, adiciona linhas "Valor Total (R$)" e "Em dobro (R$)".
-    """
     df_final = dados.copy()
-
-    # Aqui também se insere as linhas extras (que já limpam 'DATA' e 'COD').
     if inserir_totais:
         df_final = inserir_totais_na_coluna(df_final, col_valor_soma)
 
@@ -530,7 +519,6 @@ def df_to_docx_bytes(
         section.page_width = new_width
         section.page_height = new_height
 
-    # Cabeçalho
     titulo_heading = document.add_heading(titulo, level=1)
     titulo_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -545,7 +533,6 @@ def df_to_docx_bytes(
     table = document.add_table(rows=1, cols=len(colunas))
     table.style = 'Table Grid'
 
-    # Cabeçalho da Tabela
     hdr_cells = table.rows[0].cells
     for i, col_name in enumerate(colunas):
         hdr_cells[i].text = str(col_name)
@@ -553,7 +540,6 @@ def df_to_docx_bytes(
             for run in paragraph.runs:
                 run.font.bold = True
 
-    # Larguras aproximadas (mm -> Inches)
     width_map = {}
     if "COD" in colunas:
         width_map["COD"] = 20
@@ -568,7 +554,6 @@ def df_to_docx_bytes(
     if "DATA" in colunas:
         width_map["DATA"] = 30
 
-    # Linhas da Tabela
     for _, row in df_final.iterrows():
         descricao = str(row.get("DESCRIÇÃO", ""))
         is_especial = descricao in ["Valor Total (R$)", "Em dobro (R$)"]
@@ -576,29 +561,20 @@ def df_to_docx_bytes(
         row_cells = table.add_row().cells
         for i, col_name in enumerate(colunas):
             valor = str(row[col_name])
-
-            # Se for ganhos/descontos, converte p/ "123,456.78" (US style).
             if col_name in ["GANHOS", "DESCONTOS"] and valor.strip():
                 valor = to_en_us_string(valor)
-
             paragraph = row_cells[i].paragraphs[0]
             run = paragraph.add_run(valor)
-
-            # Alinhamento
             if col_name.upper() == "DESCRIÇÃO":
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
             else:
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
             run.font.size = Pt(9)
-
-            # Destaque em vermelho/negrito para linhas especiais
             if is_especial:
                 run.font.bold = True
                 run.font.size = Pt(11)
                 run.font.color.rgb = RGBColor(255, 0, 0)
 
-    # Ajustar larguras
     for i, col_name in enumerate(colunas):
         mm = width_map.get(col_name, 25)
         table.columns[i].width = Inches(mm / 25.4)
@@ -612,9 +588,6 @@ def df_to_docx_bytes(
 #   Ajuste final de valores no DOCX para PT-BR (pós-processamento)
 ###############################################################################
 def formatar_valor_brl(valor):
-    """
-    Converte string em formato "465,578.00" (US style) para "465.578,00" (PT-BR).
-    """
     try:
         f = float(str(valor).replace(",", "").replace(".", "")) / 100
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -623,10 +596,6 @@ def formatar_valor_brl(valor):
 
 
 def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
-    """
-    Lê o DOCX de 'file_input_bytes', faz a correção de valores
-    para o formato PT-BR e retorna um novo bytes em memória.
-    """
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_in:
         tmp_in.write(file_input_bytes)
         tmp_in.flush()
@@ -635,7 +604,6 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
     output_path = input_path.replace(".docx", "_corrigido.docx")
 
     doc = Document(input_path)
-    # Procuramos padrões tipo "([\d,]+\.\d{2})" => ex: 465,578.00
     pattern = re.compile(r'([\d,]+\.\d{2})')
 
     for para in doc.paragraphs:
@@ -687,7 +655,7 @@ def main():
             tmp.write(uploaded_pdf.read())
             caminho_temp = tmp.name
 
-        # Extrair nome e matrícula (usados no arquivo e no cabeçalho)
+        # Extrair nome e matrícula (não exibido, apenas armazenado)
         nome_cli, matr = extrair_nome_e_matricula(caminho_temp)
         set_state_value("nome_cliente", nome_cli)
         set_state_value("matricula", matr)
@@ -703,7 +671,7 @@ def main():
 
     df_completo = get_state_value("df_completo")
 
-    # Sanitizar strings para uso no NOME DE ARQUIVO
+    # Sanitizar strings para uso no nome do arquivo
     nome_cli_sanit = sanitizar_para_arquivo(get_state_value("nome_cliente") or "ND")
     matr_sanit = sanitizar_para_arquivo(get_state_value("matricula") or "ND")
 
@@ -849,7 +817,6 @@ def main():
                 if selected_descr:
                     df_incluido = df_sel[df_sel["DESCRIÇÃO"].isin(selected_descr)].copy()
                     set_state_value("df_descontos_gloss_sel", df_incluido)
-
                     st.success("Descontos selecionados com sucesso!")
                     st.markdown("#### Lista Restante após Inclusões")
                     st.dataframe(df_incluido, use_container_width=True)
@@ -867,15 +834,8 @@ def main():
                     df_final = df_final_sel.copy()
                     df_final["PAGINA"] = pd.to_numeric(df_final["PAGINA"], errors='coerce').fillna(0)
                     df_final = df_final.sort_values(by=["DATA", "PAGINA"]).reset_index(drop=True)
-                    # (Removida a exibição do DF final conforme solicit.)
-                    # df_final = df_final[["COD", "DESCRIÇÃO", "DESCONTOS", "DATA"]]
-
-                    # Reorganiza colunas (mantendo a original)
                     df_final = df_final[["COD", "DESCRIÇÃO", "DESCONTOS", "DATA"]]
 
-                    # ---------------------------------------------
-                    #   Geração de PDF e DOCX (COM total)
-                    # ---------------------------------------------
                     titulo_final = f"Descontos Finais (Cronológico) - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
                     colunas_pdf_finais = [
                         {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -919,3 +879,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
