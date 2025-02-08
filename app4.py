@@ -7,7 +7,8 @@ import base64
 from PyPDF2 import PdfReader
 from fpdf import FPDF
 from io import BytesIO
-from fuzzywuzzy import process
+# Use RapidFuzz, que é mais rápido
+from rapidfuzz import process
 
 # Bibliotecas para gerar DOCX
 from docx import Document
@@ -107,7 +108,6 @@ def extrair_nome_e_matricula(pdf_path):
                         if matr_match:
                             matricula = matr_match.group(1).strip()
 
-    # Se não encontrou algo, volta "N/D"
     return nome or "N/D", matricula or "N/D"
 
 
@@ -118,10 +118,6 @@ def inserir_totais_na_coluna(df, col_valor):
     """
     Insere duas linhas ao final do DataFrame: "Valor Total (R$)" e "Em dobro (R$)".
     Se a soma for zero ou a coluna não existir, não insere nada.
-
-    Ajuste adicional:
-    - Para as linhas "Valor Total (R$)" e "Em dobro (R$)", deixa em branco a coluna "DATA" (já existente).
-    - Também deixa em branco a coluna "COD", conforme solicitado.
     """
     if col_valor not in df.columns:
         return df
@@ -140,7 +136,6 @@ def inserir_totais_na_coluna(df, col_valor):
 
     df_novo = df.copy()
 
-    # Converte p/ string em formato US (p. ex. "1,234.56")
     def en_us_format(number: float) -> str:
         return f"{number:,.2f}"
 
@@ -163,7 +158,6 @@ def inserir_totais_na_coluna(df, col_valor):
         })
     ], ignore_index=True)
 
-    # Limpa DATA e COD nessas linhas especiais
     mask_especial = df_novo["DESCRIÇÃO"].isin(["Valor Total (R$)", "Em dobro (R$)"])
     if "DATA" in df_novo.columns:
         df_novo.loc[mask_especial, "DATA"] = ""
@@ -206,10 +200,6 @@ def filtrar_por_glossario(df, glossary, col_descricao="DESCRIÇÃO", threshold=8
 
 
 def limpar_valor(valor):
-    """
-    Remove espaços, pontos de milhar e troca vírgula por ponto,
-    mantendo apenas a parte numérica.
-    """
     if isinstance(valor, str):
         v = valor.replace(" ", "").replace(".", "").replace(",", ".")
         match_val = re.search(r"[\d\.]+", v)
@@ -322,11 +312,8 @@ def ajustar_descontos_por_pagina(df):
         group_ajustado = ajustar_descontos_uma_pagina(group)
         group_ajustado["PAGINA"] = page_number
         paginas_processadas.append(group_ajustado)
-
-    # Se nenhuma página foi processada, retorna o DataFrame original
     if not paginas_processadas:
         return df
-
     return pd.concat(paginas_processadas, ignore_index=True)
 
 
@@ -349,9 +336,7 @@ def processar_contracheque(pdf_path):
         else:
             continue
 
-        # Expande linhas
         df = _separar_linhas_multiplas(df)
-
         for col in ["GANHOS", "DESCONTOS"]:
             df[col] = df[col].apply(limpar_valor)
 
@@ -365,23 +350,14 @@ def processar_contracheque(pdf_path):
     dados_finais.replace('', pd.NA, inplace=True)
     dados_finais.dropna(how='all', inplace=True)
     dados_finais.fillna('', inplace=True)
-
-    # Ajusta eventual quebra de descontos
     dados_finais = ajustar_descontos_por_pagina(dados_finais)
     return dados_finais
 
 
 ###############################################################################
 #   FUNÇÃO DE GERAÇÃO DE PDF
-#   (com formatação PT-BR final para valores)
 ###############################################################################
 def formatar_valor_brl(us_string: str) -> str:
-    """
-    Converte string numérica em estilo "US" (ex: "123,456.78")
-    para estilo PT-BR ("123.456,78"), usando a lógica pedida.
-
-    Ex.: "465,578.00" -> "465.578,00"
-    """
     try:
         f = float(us_string.replace(",", "").replace(".", "")) / 100
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -390,11 +366,6 @@ def formatar_valor_brl(us_string: str) -> str:
 
 
 class PDFRelatorio(FPDF):
-    """
-    PDF em modo paisagem, repetindo cabeçalho a cada página.
-    Se 'linhas_especiais' for True, formata "Valor Total (R$)" e "Em dobro (R$)" em vermelho.
-    """
-
     def __init__(self, titulo, colunas, dados, linhas_especiais=False):
         super().__init__(orientation='L', unit='mm', format='A4')
         self.titulo = titulo
@@ -424,21 +395,17 @@ class PDFRelatorio(FPDF):
     def montar_tabela(self):
         self.set_font("Arial", "", 9)
         row_height = 7
-
         for _, row in self.dados.iterrows():
             if self.get_y() + row_height + 15 > self.h:
                 self.add_page()
-
             descricao = str(row.get("DESCRIÇÃO", ""))
             is_especial = descricao in ["Valor Total (R$)", "Em dobro (R$)"]
-
             if is_especial and self.linhas_especiais:
                 self.set_font("Arial", "B", 11)
                 self.set_text_color(255, 0, 0)
             else:
                 self.set_font("Arial", "", 9)
                 self.set_text_color(0, 0, 0)
-
             for col in self.colunas:
                 col_name = col["nome"]
                 valor = str(row.get(col_name, ""))
@@ -446,7 +413,6 @@ class PDFRelatorio(FPDF):
                     valor = formatar_valor_brl(valor)
                 self.cell(col["largura"], row_height, valor, border=1, align=col["alinhamento"])
             self.ln(row_height)
-
             if is_especial and self.linhas_especiais:
                 self.set_font("Arial", "", 9)
                 self.set_text_color(0, 0, 0)
@@ -457,30 +423,15 @@ class PDFRelatorio(FPDF):
         self.output(nome_arquivo)
 
 
-def salvar_em_pdf(
-        dados: pd.DataFrame,
-        titulo_pdf: str,
-        colunas_def: list,
-        inserir_totais=False,
-        col_valor_soma="DESCONTOS",
-        linhas_especiais=False
-) -> bytes:
-    """
-    Monta PDF e retorna em bytes.
-    Se inserir_totais=True: insere linhas de total/dobro, usando 'col_valor_soma'.
-    Se linhas_especiais=True, destaca as linhas de total/dobro em vermelho.
-    """
+def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list, inserir_totais=False, col_valor_soma="DESCONTOS", linhas_especiais=False) -> bytes:
     for col_def in colunas_def:
         if col_def["nome"] not in dados.columns:
             dados[col_def["nome"]] = ""
-
     df_final = dados.copy()
     if inserir_totais:
         df_final = inserir_totais_na_coluna(df_final, col_valor_soma)
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         tmp_path = tmp_pdf.name
-
     pdf = PDFRelatorio(titulo_pdf, colunas_def, df_final, linhas_especiais=linhas_especiais)
     pdf.gerar_pdf(tmp_path)
     with open(tmp_path, "rb") as f:
@@ -490,9 +441,7 @@ def salvar_em_pdf(
 
 
 ###############################################################################
-#    GERAÇÃO DE DOCX (em duas etapas):
-#      1) Criação do DOCX com valores no estilo "123,456.78"
-#      2) Ajuste final para PT-BR usando a função 'ajustar_valores_docx'
+#    GERAÇÃO DE DOCX
 ###############################################################################
 def to_en_us_string(val):
     try:
@@ -502,44 +451,33 @@ def to_en_us_string(val):
         return str(val)
 
 
-def df_to_docx_bytes(
-        dados: pd.DataFrame,
-        titulo: str,
-        inserir_totais=False,
-        col_valor_soma="DESCONTOS"
-) -> bytes:
+def df_to_docx_bytes(dados: pd.DataFrame, titulo: str, inserir_totais=False, col_valor_soma="DESCONTOS") -> bytes:
     df_final = dados.copy()
     if inserir_totais:
         df_final = inserir_totais_na_coluna(df_final, col_valor_soma)
-
     document = Document()
     for section in document.sections:
         section.orientation = WD_ORIENT.LANDSCAPE
         new_width, new_height = section.page_height, section.page_width
         section.page_width = new_width
         section.page_height = new_height
-
     titulo_heading = document.add_heading(titulo, level=1)
     titulo_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
     if df_final.empty:
         p = document.add_paragraph("DataFrame vazio - nenhum dado para exibir.")
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         buf = BytesIO()
         document.save(buf)
         return buf.getvalue()
-
     colunas = df_final.columns.tolist()
     table = document.add_table(rows=1, cols=len(colunas))
     table.style = 'Table Grid'
-
     hdr_cells = table.rows[0].cells
     for i, col_name in enumerate(colunas):
         hdr_cells[i].text = str(col_name)
         for paragraph in hdr_cells[i].paragraphs:
             for run in paragraph.runs:
                 run.font.bold = True
-
     width_map = {}
     if "COD" in colunas:
         width_map["COD"] = 20
@@ -553,11 +491,9 @@ def df_to_docx_bytes(
         width_map["PAGINA"] = 20
     if "DATA" in colunas:
         width_map["DATA"] = 30
-
     for _, row in df_final.iterrows():
         descricao = str(row.get("DESCRIÇÃO", ""))
         is_especial = descricao in ["Valor Total (R$)", "Em dobro (R$)"]
-
         row_cells = table.add_row().cells
         for i, col_name in enumerate(colunas):
             valor = str(row[col_name])
@@ -574,18 +510,16 @@ def df_to_docx_bytes(
                 run.font.bold = True
                 run.font.size = Pt(11)
                 run.font.color.rgb = RGBColor(255, 0, 0)
-
     for i, col_name in enumerate(colunas):
         mm = width_map.get(col_name, 25)
         table.columns[i].width = Inches(mm / 25.4)
-
     buf = BytesIO()
     document.save(buf)
     return buf.getvalue()
 
 
 ###############################################################################
-#   Ajuste final de valores no DOCX para PT-BR (pós-processamento)
+#   Ajuste final de valores no DOCX para PT-BR
 ###############################################################################
 def formatar_valor_brl(valor):
     try:
@@ -600,12 +534,10 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
         tmp_in.write(file_input_bytes)
         tmp_in.flush()
         input_path = tmp_in.name
-
     output_path = input_path.replace(".docx", "_corrigido.docx")
-
     doc = Document(input_path)
+    import re
     pattern = re.compile(r'([\d,]+\.\d{2})')
-
     for para in doc.paragraphs:
         found = pattern.findall(para.text)
         if not found:
@@ -613,15 +545,11 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
         for val_us in found:
             val_br = formatar_valor_brl(val_us)
             para.text = para.text.replace(val_us, val_br)
-
     doc.save(output_path)
-
     with open(output_path, "rb") as f:
         final_bytes = f.read()
-
     os.remove(input_path)
     os.remove(output_path)
-
     return final_bytes
 
 
@@ -642,46 +570,27 @@ def main():
         )
 
     st.title("Analista de Contracheques")
-
-    # Carregar glossário
     glossary_terms = carregar_glossario(GLOSSARY_PATH)
-
-    # Upload do PDF
-    uploaded_pdf = st.file_uploader(
-        "Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
-
+    uploaded_pdf = st.file_uploader("Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
     if uploaded_pdf is not None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(uploaded_pdf.read())
             caminho_temp = tmp.name
-
-        # Extrair nome e matrícula (não exibido, apenas armazenado)
         nome_cli, matr = extrair_nome_e_matricula(caminho_temp)
         set_state_value("nome_cliente", nome_cli)
         set_state_value("matricula", matr)
-
-        # Processar PDF
         df = processar_contracheque(caminho_temp)
         os.unlink(caminho_temp)
-
         if not df.empty:
             set_state_value("df_completo", df)
         else:
             st.warning("Não foi possível extrair as informações do PDF ou o arquivo está vazio.")
-
     df_completo = get_state_value("df_completo")
-
-    # Sanitizar strings para uso no nome do arquivo
     nome_cli_sanit = sanitizar_para_arquivo(get_state_value("nome_cliente") or "ND")
     matr_sanit = sanitizar_para_arquivo(get_state_value("matricula") or "ND")
-
     if df_completo is not None and not df_completo.empty:
         st.markdown("### DataFrame do Contracheque Completo")
         st.dataframe(df_completo, use_container_width=True)
-
-        # ---------------------------------------------
-        # PDF Completo (SEM TOTAIS)
-        # ---------------------------------------------
         titulo_completo = f"Relatório de Contracheque (Completo) - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
         colunas_pdf_completo = [
             {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -706,28 +615,19 @@ def main():
             file_name=pdf_filename_completo,
             mime="application/pdf"
         )
-
-        # ---------------------------------------------
-        # Análise de Descontos
-        # ---------------------------------------------
         st.markdown("## Análise de Descontos")
-
         with st.form("form_filtrar_descontos"):
             st.markdown("### 1) Filtrar Operações de Descontos")
             submit_desc = st.form_submit_button("Filtrar Descontos")
-
         if submit_desc:
             df_desc = df_completo.drop(columns=["GANHOS"], errors='ignore')
             df_desc = df_desc[df_desc["DESCONTOS"].str.strip() != ""]
             df_desc.reset_index(drop=True, inplace=True)
             set_state_value("df_descontos", df_desc)
-
         df_descontos = get_state_value("df_descontos")
         if df_descontos is not None and not df_descontos.empty:
             st.markdown("### 2) Extrato de Descontos")
             st.dataframe(df_descontos, use_container_width=True)
-
-            # PDF Descontos (SEM TOTAIS)
             titulo_desc = f"Contracheque - Descontos - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
             colunas_pdf_desc = [
                 {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -751,24 +651,20 @@ def main():
                 file_name=pdf_filename_desc,
                 mime="application/pdf"
             )
-
-            # 3) Filtrar Descontos no Glossário
             with st.form("form_filtro_gloss"):
                 st.markdown("### 3) Filtrar Descontos no Glossário (Precisão Ajustável)")
                 thresh = st.slider("Nível de Similaridade (0.5 a 1.0)", 0.5, 1.0, 0.85, 0.05)
                 submit_gloss = st.form_submit_button("Descontos no Glossário")
-
             if submit_gloss:
-                df_desc_gloss = filtrar_por_glossario(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
+                # Adiciona um spinner para indicar processamento
+                with st.spinner("Filtrando descontos no glossário..."):
+                    df_desc_gloss = filtrar_por_glossario(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
                 set_state_value("df_descontos_gloss", df_desc_gloss)
                 set_state_value("df_descontos_gloss_sel", None)
-
         df_descontos_gloss = get_state_value("df_descontos_gloss")
         if df_descontos_gloss is not None and not df_descontos_gloss.empty:
             st.markdown("#### Descontos x Glossário")
             st.dataframe(df_descontos_gloss, use_container_width=True)
-
-            # PDF Descontos x Glossário (SEM TOTAIS)
             titulo_gloss = f"Descontos x Glossário - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
             colunas_pdf_gloss = [
                 {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -792,27 +688,21 @@ def main():
                 file_name=pdf_filename_gloss,
                 mime="application/pdf"
             )
-
-            # 4) Lista Única + Inclusão
             df_gloss_origem = df_descontos_gloss
             df_sel = get_state_value("df_descontos_gloss_sel")
             if df_sel is None or df_sel.empty:
                 df_sel = df_gloss_origem
-
             with st.form("form_inclusao_descontos"):
                 st.markdown("### 4) Lista Única de Descontos")
                 valores_unicos = sorted(df_sel["DESCRIÇÃO"].unique())
                 st.write("Marque os itens que deseja incluir:")
-
                 selected_descr = []
                 for i, val in enumerate(valores_unicos):
                     qtd = df_sel[df_sel["DESCRIÇÃO"] == val].shape[0]
                     label_str = f"{i + 1} - {val} ({qtd}x)"
                     if st.checkbox(label_str, key=f"chk_{i}"):
                         selected_descr.append(val)
-
                 incluir_btn = st.form_submit_button("Confirmar Inclusão (Descontos)")
-
             if incluir_btn:
                 if selected_descr:
                     df_incluido = df_sel[df_sel["DESCRIÇÃO"].isin(selected_descr)].copy()
@@ -822,20 +712,16 @@ def main():
                     st.dataframe(df_incluido, use_container_width=True)
                 else:
                     st.warning("Nenhuma descrição selecionada.")
-
-            # 5) Rúbricas para Débitos (Descontos Finais)
             df_final_sel = get_state_value("df_descontos_gloss_sel")
             if df_final_sel is not None and not df_final_sel.empty:
                 with st.form("form_descontos_finais"):
                     st.markdown("### 5) Apresentar Rúbricas para Débitos (Descontos Finais)")
                     submit_final = st.form_submit_button("Gerar Relatório Final de Descontos")
-
                 if submit_final:
                     df_final = df_final_sel.copy()
                     df_final["PAGINA"] = pd.to_numeric(df_final["PAGINA"], errors='coerce').fillna(0)
                     df_final = df_final.sort_values(by=["DATA", "PAGINA"]).reset_index(drop=True)
                     df_final = df_final[["COD", "DESCRIÇÃO", "DESCONTOS", "DATA"]]
-
                     titulo_final = f"Descontos Finais (Cronológico) - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
                     colunas_pdf_finais = [
                         {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -843,7 +729,6 @@ def main():
                         {"nome": "DESCONTOS", "largura": 30, "alinhamento": "R"},
                         {"nome": "DATA", "largura": 30, "alinhamento": "C"},
                     ]
-
                     pdf_data_finais = salvar_em_pdf(
                         dados=df_final.copy(),
                         titulo_pdf=titulo_final,
@@ -859,7 +744,6 @@ def main():
                         file_name=pdf_filename_finais,
                         mime="application/pdf"
                     )
-
                     docx_bytes = df_to_docx_bytes(
                         dados=df_final.copy(),
                         titulo=titulo_final,
@@ -867,7 +751,6 @@ def main():
                         col_valor_soma="DESCONTOS"
                     )
                     docx_bytes_corrigido = ajustar_valores_docx(docx_bytes)
-
                     docx_filename_finais = pdf_filename_finais.replace(".pdf", ".docx")
                     st.download_button(
                         label="Baixar DOCX (Descontos Finais - Cronológico)",
@@ -879,4 +762,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
