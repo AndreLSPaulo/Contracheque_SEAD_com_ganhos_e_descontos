@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import tempfile
 import os
 import re
@@ -7,8 +8,8 @@ import base64
 from PyPDF2 import PdfReader
 from fpdf import FPDF
 from io import BytesIO
-# Utilize RapidFuzz (mais rápido que fuzzywuzzy)
-from rapidfuzz import process
+# Utilize RapidFuzz para fuzzy matching (mais rápido e com funções vetorizadas)
+from rapidfuzz import process, fuzz
 
 # Bibliotecas para gerar DOCX
 from docx import Document
@@ -30,10 +31,6 @@ _fallback_state = {
 
 
 def get_state_value(key):
-    """
-    Retorna o valor de `key` em st.session_state (se houver),
-    do contrário retorna do fallback local _fallback_state.
-    """
     try:
         return st.session_state[key]
     except:
@@ -41,10 +38,6 @@ def get_state_value(key):
 
 
 def set_state_value(key, value):
-    """
-    Seta `value` em st.session_state[key] se disponível;
-    caso contrário, seta em _fallback_state.
-    """
     try:
         st.session_state[key] = value
     except:
@@ -123,13 +116,11 @@ def inserir_totais_na_coluna(df, col_valor):
 
     df_novo = pd.concat([
         df_novo,
-        pd.DataFrame({col_valor: [total_str],
-                      "DESCRIÇÃO": ["Valor Total (R$)"]})
+        pd.DataFrame({col_valor: [total_str], "DESCRIÇÃO": ["Valor Total (R$)"]})
     ], ignore_index=True)
     df_novo = pd.concat([
         df_novo,
-        pd.DataFrame({col_valor: [dobro_str],
-                      "DESCRIÇÃO": ["Em dobro (R$)"]})
+        pd.DataFrame({col_valor: [dobro_str], "DESCRIÇÃO": ["Em dobro (R$)"]})
     ], ignore_index=True)
     mask_especial = df_novo["DESCRIÇÃO"].isin(["Valor Total (R$)", "Em dobro (R$)"])
     if "DATA" in df_novo.columns:
@@ -157,21 +148,20 @@ def carregar_glossario(path):
         return []
 
 
-# Versão otimizada da filtragem usando os valores únicos e RapidFuzz
+# Função vetorizada utilizando process.cdist para acelerar o fuzzy matching
 @st.cache_data(show_spinner=False)
-def filtrar_por_glossario_optimized(df, glossary, col_descricao="DESCRIÇÃO", threshold=85):
+def filtrar_por_glossario_vectorized(df, glossary, col_descricao="DESCRIÇÃO", threshold=85):
     if df.empty or not glossary:
         return pd.DataFrame()
-    unique_desc = df[col_descricao].unique()
-    mapping = {}
-    for desc in unique_desc:
-        result = process.extractOne(str(desc), glossary)
-        mapping[desc] = (result is not None and result[1] >= threshold)
+    unique_desc = list(df[col_descricao].unique())
+    # Calcula a matriz de similaridades entre os valores únicos e o glossário
+    sim_matrix = process.cdist(unique_desc, glossary, scorer=fuzz.ratio)
+    max_scores = np.max(sim_matrix, axis=1)
+    mapping = {desc: (score >= threshold) for desc, score in zip(unique_desc, max_scores)}
     mask = df[col_descricao].map(mapping)
     return df[mask]
 
 
-# Caso queira manter a função antiga, substitua-a pela otimizada.
 def limpar_valor(valor):
     if isinstance(valor, str):
         v = valor.replace(" ", "").replace(".", "").replace(",", ".")
@@ -221,11 +211,6 @@ def encontrar_cabecalho(df):
 
 
 def ler_tabelas(pdf_path):
-    """
-    Tenta extrair tabelas do PDF usando Camelot.
-    Primeiro tenta com flavor 'lattice'. Se não encontrar nenhuma tabela,
-    tenta com flavor 'stream'.
-    """
     try:
         import camelot
         tables = camelot.read_pdf(
@@ -387,7 +372,8 @@ class PDFRelatorio(FPDF):
         self.output(nome_arquivo)
 
 
-def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list, inserir_totais=False, col_valor_soma="DESCONTOS", linhas_especiais=False) -> bytes:
+def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list,
+                  inserir_totais=False, col_valor_soma="DESCONTOS", linhas_especiais=False) -> bytes:
     for col_def in colunas_def:
         if col_def["nome"] not in dados.columns:
             dados[col_def["nome"]] = ""
@@ -622,8 +608,8 @@ def main():
                 submit_gloss = st.form_submit_button("Descontos no Glossário")
             if submit_gloss:
                 with st.spinner("Filtrando descontos no glossário..."):
-                    # Usa a função otimizada com cache para acelerar o processamento
-                    df_desc_gloss = filtrar_por_glossario_optimized(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
+                    # Usamos a versão vetorizada para acelerar o processamento
+                    df_desc_gloss = filtrar_por_glossario_vectorized(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
                 set_state_value("df_descontos_gloss", df_desc_gloss)
                 set_state_value("df_descontos_gloss_sel", None)
         df_descontos_gloss = get_state_value("df_descontos_gloss")
@@ -727,3 +713,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
