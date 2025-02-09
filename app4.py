@@ -7,7 +7,7 @@ import base64
 from PyPDF2 import PdfReader
 from fpdf import FPDF
 from io import BytesIO
-# Use RapidFuzz, que é mais rápido
+# Utilize RapidFuzz (mais rápido que fuzzywuzzy)
 from rapidfuzz import process
 
 # Bibliotecas para gerar DOCX
@@ -56,7 +56,7 @@ def set_state_value(key, value):
 ###############################################################################
 st.set_page_config(page_title="Analista de Contracheques", layout="centered")
 
-LOGO_PATH = "MP.png"  # Caminho para a logomarca
+LOGO_PATH = "MP.png"        # Caminho para a logomarca
 GLOSSARY_PATH = "rubricas.txt"  # Caminho para o glossário (rubricas)
 
 
@@ -64,10 +64,6 @@ GLOSSARY_PATH = "rubricas.txt"  # Caminho para o glossário (rubricas)
 # FUNÇÃO PARA SANITIZAR STRINGS (NOME, MATRICULA) NO ARQUIVO
 ###############################################################################
 def sanitizar_para_arquivo(texto: str) -> str:
-    """
-    Remove espaços e caracteres especiais, deixando underscores.
-    Ex.: "João da Silva" -> "Joao_da_Silva"
-    """
     texto = texto.strip()
     texto = texto.replace(" ", "_")
     texto = re.sub(r"[^\w\-_\.]", "", texto, flags=re.UNICODE)
@@ -75,39 +71,29 @@ def sanitizar_para_arquivo(texto: str) -> str:
 
 
 ###############################################################################
-#    FUNÇÃO PARA EXTRAIR NOME E MATRÍCULA (mas NÃO exibimos na interface)
+#    FUNÇÃO PARA EXTRAIR NOME E MATRÍCULA (não exibidos, apenas armazenados)
 ###############################################################################
 def extrair_nome_e_matricula(pdf_path):
-    """
-    Extrai nome e matrícula do PDF (primeira página),
-    porém não exibimos esses dados no front-end (apenas armazenamos).
-    """
     nome = "N/D"
     matricula = "N/D"
-
     with open(pdf_path, 'rb') as f:
         reader = PdfReader(f)
         if len(reader.pages) > 0:
             text = reader.pages[0].extract_text() or ""
             lines = text.split('\n')
-
             for i, linha in enumerate(lines):
-                # Identifica a linha que contém "NOME"
                 if "NOME" in linha.upper():
                     if i + 1 < len(lines):
                         valor_nome = lines[i + 1].strip()
                         match_nome = re.match(r"([^\d]+)", valor_nome)
                         if match_nome:
                             nome = match_nome.group(1).strip()
-
-                # Identifica a linha que contém "MATRÍCULA-SEQ-DIG"
                 if "MATRÍCULA-SEQ-DIG" in linha.upper():
                     if i + 1 < len(lines):
                         valor_matr = lines[i + 1].strip()
                         matr_match = re.search(r"(\d{3}\.\d{3}-\d\s*[A-Z]*)", valor_matr)
                         if matr_match:
                             matricula = matr_match.group(1).strip()
-
     return nome or "N/D", matricula or "N/D"
 
 
@@ -115,10 +101,6 @@ def extrair_nome_e_matricula(pdf_path):
 #   FUNÇÃO AUXILIAR PARA INSERIR LINHAS DE TOTAL / EM DOBRO
 ###############################################################################
 def inserir_totais_na_coluna(df, col_valor):
-    """
-    Insere duas linhas ao final do DataFrame: "Valor Total (R$)" e "Em dobro (R$)".
-    Se a soma for zero ou a coluna não existir, não insere nada.
-    """
     if col_valor not in df.columns:
         return df
 
@@ -130,40 +112,30 @@ def inserir_totais_na_coluna(df, col_valor):
 
     vals = df[col_valor].apply(_to_float)
     soma = vals.sum()
-
     if soma == 0:
         return df
 
     df_novo = df.copy()
-
     def en_us_format(number: float) -> str:
         return f"{number:,.2f}"
-
     total_str = en_us_format(soma)
     dobro_str = en_us_format(2 * soma)
 
     df_novo = pd.concat([
         df_novo,
-        pd.DataFrame({
-            col_valor: [total_str],
-            "DESCRIÇÃO": ["Valor Total (R$)"]
-        })
+        pd.DataFrame({col_valor: [total_str],
+                      "DESCRIÇÃO": ["Valor Total (R$)"]})
     ], ignore_index=True)
-
     df_novo = pd.concat([
         df_novo,
-        pd.DataFrame({
-            col_valor: [dobro_str],
-            "DESCRIÇÃO": ["Em dobro (R$)"]
-        })
+        pd.DataFrame({col_valor: [dobro_str],
+                      "DESCRIÇÃO": ["Em dobro (R$)"]})
     ], ignore_index=True)
-
     mask_especial = df_novo["DESCRIÇÃO"].isin(["Valor Total (R$)", "Em dobro (R$)"])
     if "DATA" in df_novo.columns:
         df_novo.loc[mask_especial, "DATA"] = ""
     if "COD" in df_novo.columns:
         df_novo.loc[mask_especial, "COD"] = ""
-
     return df_novo
 
 
@@ -185,20 +157,21 @@ def carregar_glossario(path):
         return []
 
 
-def match_glossary(text, glossary, threshold=85):
-    if not glossary or not text:
-        return False
-    result = process.extractOne(text, glossary)
-    return (result is not None) and (result[1] >= threshold)
-
-
-def filtrar_por_glossario(df, glossary, col_descricao="DESCRIÇÃO", threshold=85):
+# Versão otimizada da filtragem usando os valores únicos e RapidFuzz
+@st.cache_data(show_spinner=False)
+def filtrar_por_glossario_optimized(df, glossary, col_descricao="DESCRIÇÃO", threshold=85):
     if df.empty or not glossary:
         return pd.DataFrame()
-    mask = df[col_descricao].apply(lambda x: match_glossary(str(x), glossary, threshold))
+    unique_desc = df[col_descricao].unique()
+    mapping = {}
+    for desc in unique_desc:
+        result = process.extractOne(str(desc), glossary)
+        mapping[desc] = (result is not None and result[1] >= threshold)
+    mask = df[col_descricao].map(mapping)
     return df[mask]
 
 
+# Caso queira manter a função antiga, substitua-a pela otimizada.
 def limpar_valor(valor):
     if isinstance(valor, str):
         v = valor.replace(" ", "").replace(".", "").replace(",", ".")
@@ -280,7 +253,6 @@ def ajustar_descontos_uma_pagina(df):
         d_val = str(row["DESCONTOS"]).strip()
         if d_val and d_val != "-":
             discount_values.append(d_val)
-
     last_ganhos_index = -1
     for i, row in df.iterrows():
         g_val = str(row["GANHOS"]).strip()
@@ -288,10 +260,8 @@ def ajustar_descontos_uma_pagina(df):
             last_ganhos_index = i
         else:
             break
-
     start_index = last_ganhos_index + 1
     discount_index = 0
-
     for i in range(0, start_index):
         df.at[i, "DESCONTOS"] = ""
     for i in range(start_index, len(df)):
@@ -321,32 +291,26 @@ def processar_contracheque(pdf_path):
     colunas_desejadas = ["COD", "DESCRIÇÃO", "GANHOS", "DESCONTOS"]
     colunas_finais = colunas_desejadas + ["PAGINA", "DATA"]
     dados_finais = pd.DataFrame(columns=colunas_finais)
-
     tables = ler_tabelas(pdf_path)
     for table in tables:
         df = table.df
         idx_cab = encontrar_cabecalho(df)
         if idx_cab is None:
             continue
-
         df = df.iloc[idx_cab + 1:].reset_index(drop=True)
         if df.shape[1] >= 7:
             df = df.iloc[:, [0, 1, 5, 6]]
             df.columns = colunas_desejadas
         else:
             continue
-
         df = _separar_linhas_multiplas(df)
         for col in ["GANHOS", "DESCONTOS"]:
             df[col] = df[col].apply(limpar_valor)
-
         pagina_atual = table.page
         data_encontrada = extrair_data_da_pagina(pdf_path, pagina_atual)
         df["PAGINA"] = pagina_atual
         df["DATA"] = data_encontrada
-
         dados_finais = pd.concat([dados_finais, df], ignore_index=True)
-
     dados_finais.replace('', pd.NA, inplace=True)
     dados_finais.dropna(how='all', inplace=True)
     dados_finais.fillna('', inplace=True)
@@ -355,7 +319,7 @@ def processar_contracheque(pdf_path):
 
 
 ###############################################################################
-#   FUNÇÃO DE GERAÇÃO DE PDF
+#   FUNÇÃO DE GERAÇÃO DE PDF (formatação PT-BR)
 ###############################################################################
 def formatar_valor_brl(us_string: str) -> str:
     try:
@@ -441,7 +405,7 @@ def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list, inser
 
 
 ###############################################################################
-#    GERAÇÃO DE DOCX
+#    GERAÇÃO DE DOCX (em duas etapas)
 ###############################################################################
 def to_en_us_string(val):
     try:
@@ -536,7 +500,6 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
         input_path = tmp_in.name
     output_path = input_path.replace(".docx", "_corrigido.docx")
     doc = Document(input_path)
-    import re
     pattern = re.compile(r'([\d,]+\.\d{2})')
     for para in doc.paragraphs:
         found = pattern.findall(para.text)
@@ -568,9 +531,10 @@ def main():
             """,
             unsafe_allow_html=True,
         )
-
     st.title("Analista de Contracheques")
+    # Carregar glossário
     glossary_terms = carregar_glossario(GLOSSARY_PATH)
+    # Upload do PDF
     uploaded_pdf = st.file_uploader("Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
     if uploaded_pdf is not None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -591,6 +555,7 @@ def main():
     if df_completo is not None and not df_completo.empty:
         st.markdown("### DataFrame do Contracheque Completo")
         st.dataframe(df_completo, use_container_width=True)
+        # PDF Completo
         titulo_completo = f"Relatório de Contracheque (Completo) - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
         colunas_pdf_completo = [
             {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -656,9 +621,9 @@ def main():
                 thresh = st.slider("Nível de Similaridade (0.5 a 1.0)", 0.5, 1.0, 0.85, 0.05)
                 submit_gloss = st.form_submit_button("Descontos no Glossário")
             if submit_gloss:
-                # Adiciona um spinner para indicar processamento
                 with st.spinner("Filtrando descontos no glossário..."):
-                    df_desc_gloss = filtrar_por_glossario(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
+                    # Usa a função otimizada com cache para acelerar o processamento
+                    df_desc_gloss = filtrar_por_glossario_optimized(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
                 set_state_value("df_descontos_gloss", df_desc_gloss)
                 set_state_value("df_descontos_gloss_sel", None)
         df_descontos_gloss = get_state_value("df_descontos_gloss")
@@ -762,5 +727,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
