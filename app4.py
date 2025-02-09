@@ -8,7 +8,7 @@ import base64
 from PyPDF2 import PdfReader
 from fpdf import FPDF
 from io import BytesIO
-# Use RapidFuzz, que é mais rápido
+# Use RapidFuzz, que é mais rápido para fuzzy matching
 from rapidfuzz import process, fuzz
 
 # Bibliotecas para gerar DOCX
@@ -47,7 +47,7 @@ def set_state_value(key, value):
 st.set_page_config(page_title="Analista de Contracheques", layout="centered")
 
 LOGO_PATH = "MP.png"        # Caminho para a logomarca
-GLOSSARY_PATH = "rubricas.txt"  # Caminho para o glossário (lista de Rubricas)
+GLOSSARY_PATH = "Rubricas.txt"  # Nome do arquivo de Glossário (Rubricas.txt)
 
 ###############################################################################
 # FUNÇÃO PARA SANITIZAR STRINGS (NOME, MATRICULA)
@@ -144,11 +144,10 @@ def get_image_base64(file_path):
     with open(file_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
-# Atualização: utiliza o diretório do script para construir o caminho relativo ao arquivo
+# Utiliza o diretório atual para compor o caminho do arquivo Rubricas.txt
 def carregar_glossario(path):
     try:
-        base_dir = os.path.dirname(__file__)
-        full_path = os.path.join(base_dir, path)
+        full_path = os.path.join(os.getcwd(), path)
         with open(full_path, "r", encoding="utf-8") as f:
             return f.read().splitlines()
     except Exception as e:
@@ -472,13 +471,13 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
     return final_bytes
 
 ###############################################################################
-# Função para cruzar o extrato de descontos com a lista de rubricas
+# Função para cruzar o Extrato de Descontos com a Lista de Rubricas
 ###############################################################################
 def cruzar_descontos_com_rubricas(df_descontos, glossary, threshold=85):
     """
     Retorna as linhas de df_descontos cuja coluna "DESCRIÇÃO" apresenta
     similaridade (usando fuzzy matching com fuzz.ratio) maior ou igual ao limiar
-    com algum dos termos do glossário.
+    com algum dos termos da lista de Rubricas.
     """
     if df_descontos.empty or not glossary:
         return pd.DataFrame()
@@ -505,7 +504,7 @@ def main():
 
     st.title("Analista de Contracheques")
 
-    # Carregar glossário (lista de Rubricas) – para itens 2.1 e 3
+    # Carregar glossário (lista de Rubricas)
     glossary_terms = carregar_glossario(GLOSSARY_PATH)
 
     # Upload do PDF
@@ -598,12 +597,12 @@ def main():
                 file_name=pdf_filename_desc,
                 mime="application/pdf"
             )
-
-            # Item 2.1: Lista das Rubricas (conteúdo do arquivo rubricas.txt)
+            
+            # Item 2.1: Lista das Rubricas (exibição do conteúdo do arquivo Rubricas.txt)
             st.markdown("### 2.1) Lista das Rubricas")
             df_rubricas = pd.DataFrame({"Rubricas": glossary_terms})
             st.dataframe(df_rubricas, use_container_width=True)
-
+            
             # Item 3: Cruzamento entre Extrato de Descontos e Rubricas
             with st.form("form_filtro_gloss"):
                 st.markdown("### 3) Filtrar Descontos no Glossário (Precisão Ajustável)")
@@ -615,7 +614,7 @@ def main():
                     df_desc_gloss = cruzar_descontos_com_rubricas(df_descontos, glossary_terms, threshold_value)
                 set_state_value("df_descontos_gloss", df_desc_gloss)
                 set_state_value("df_descontos_gloss_sel", None)
-
+                
         df_descontos_gloss = get_state_value("df_descontos_gloss")
         if df_descontos_gloss is not None and not df_descontos_gloss.empty:
             st.markdown("#### Descontos x Glossário")
@@ -716,3 +715,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
