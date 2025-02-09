@@ -8,7 +8,7 @@ import base64
 from PyPDF2 import PdfReader
 from fpdf import FPDF
 from io import BytesIO
-# Utilize RapidFuzz para fuzzy matching (mais rápido e com funções vetorizadas)
+# Use RapidFuzz, que é mais rápido para fuzzy matching
 from rapidfuzz import process, fuzz
 
 # Bibliotecas para gerar DOCX
@@ -18,7 +18,7 @@ from docx.enum.section import WD_ORIENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 ###############################################################################
-#               FALLBACK PARA st.session_state (EVITA KeyError)
+# FALLBACK PARA st.session_state (EVITA KeyError)
 ###############################################################################
 _fallback_state = {
     "df_completo": None,
@@ -29,13 +29,11 @@ _fallback_state = {
     "matricula": None,
 }
 
-
 def get_state_value(key):
     try:
         return st.session_state[key]
     except:
         return _fallback_state.get(key, None)
-
 
 def set_state_value(key, value):
     try:
@@ -43,18 +41,16 @@ def set_state_value(key, value):
     except:
         _fallback_state[key] = value
 
-
 ###############################################################################
-#       CONFIGURAÇÃO INICIAL DO STREAMLIT
+# CONFIGURAÇÃO INICIAL DO STREAMLIT
 ###############################################################################
 st.set_page_config(page_title="Analista de Contracheques", layout="centered")
 
 LOGO_PATH = "MP.png"        # Caminho para a logomarca
-GLOSSARY_PATH = "rubricas.txt"  # Caminho para o glossário (rubricas)
-
+GLOSSARY_PATH = "rubricas.txt"  # Caminho para o glossário (lista de Rubricas)
 
 ###############################################################################
-# FUNÇÃO PARA SANITIZAR STRINGS (NOME, MATRICULA) NO ARQUIVO
+# FUNÇÃO PARA SANITIZAR STRINGS (NOME, MATRICULA)
 ###############################################################################
 def sanitizar_para_arquivo(texto: str) -> str:
     texto = texto.strip()
@@ -62,9 +58,8 @@ def sanitizar_para_arquivo(texto: str) -> str:
     texto = re.sub(r"[^\w\-_\.]", "", texto, flags=re.UNICODE)
     return texto
 
-
 ###############################################################################
-#    FUNÇÃO PARA EXTRAIR NOME E MATRÍCULA (não exibidos, apenas armazenados)
+# FUNÇÃO PARA EXTRAIR NOME E MATRÍCULA (do PDF – não exibidos)
 ###############################################################################
 def extrair_nome_e_matricula(pdf_path):
     nome = "N/D"
@@ -89,9 +84,19 @@ def extrair_nome_e_matricula(pdf_path):
                             matricula = matr_match.group(1).strip()
     return nome or "N/D", matricula or "N/D"
 
+###############################################################################
+# FUNÇÃO PARA LIMPAR VALOR
+###############################################################################
+def limpar_valor(valor):
+    if isinstance(valor, str):
+        v = valor.replace(" ", "").replace(".", "").replace(",", ".")
+        match_val = re.search(r"[\d\.]+", v)
+        if match_val:
+            return match_val.group(0)
+    return valor
 
 ###############################################################################
-#   FUNÇÃO AUXILIAR PARA INSERIR LINHAS DE TOTAL / EM DOBRO
+# FUNÇÃO AUXILIAR PARA INSERIR LINHAS DE TOTAL / EM DOBRO
 ###############################################################################
 def inserir_totais_na_coluna(df, col_valor):
     if col_valor not in df.columns:
@@ -129,16 +134,14 @@ def inserir_totais_na_coluna(df, col_valor):
         df_novo.loc[mask_especial, "COD"] = ""
     return df_novo
 
-
 ###############################################################################
-#   FUNÇÕES GERAIS DE SUPORTE (Glossário, etc.)
+# FUNÇÕES GERAIS DE SUPORTE (Glossário e imagens)
 ###############################################################################
 def get_image_base64(file_path):
     if not os.path.exists(file_path):
         return ""
     with open(file_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
-
 
 def carregar_glossario(path):
     try:
@@ -147,32 +150,8 @@ def carregar_glossario(path):
     except IOError:
         return []
 
-
-# Função vetorizada utilizando process.cdist para acelerar o fuzzy matching
-@st.cache_data(show_spinner=False)
-def filtrar_por_glossario_vectorized(df, glossary, col_descricao="DESCRIÇÃO", threshold=85):
-    if df.empty or not glossary:
-        return pd.DataFrame()
-    unique_desc = list(df[col_descricao].unique())
-    # Calcula a matriz de similaridades entre os valores únicos e o glossário
-    sim_matrix = process.cdist(unique_desc, glossary, scorer=fuzz.ratio)
-    max_scores = np.max(sim_matrix, axis=1)
-    mapping = {desc: (score >= threshold) for desc, score in zip(unique_desc, max_scores)}
-    mask = df[col_descricao].map(mapping)
-    return df[mask]
-
-
-def limpar_valor(valor):
-    if isinstance(valor, str):
-        v = valor.replace(" ", "").replace(".", "").replace(",", ".")
-        match_val = re.search(r"[\d\.]+", v)
-        if match_val:
-            return match_val.group(0)
-    return valor
-
-
 ###############################################################################
-#   EXTRAÇÃO DE TABELAS (CONTRACHEQUE) VIA CAMELOT
+# EXTRAÇÃO DE TABELAS VIA CAMELOT
 ###############################################################################
 def extrair_data_da_pagina(pdf_path, page_number):
     try:
@@ -188,7 +167,6 @@ def extrair_data_da_pagina(pdf_path, page_number):
         pass
     return "N/D"
 
-
 def _separar_linhas_multiplas(df: pd.DataFrame) -> pd.DataFrame:
     linhas_expandidas = []
     for _, row in df.iterrows():
@@ -202,13 +180,11 @@ def _separar_linhas_multiplas(df: pd.DataFrame) -> pd.DataFrame:
             linhas_expandidas.append(nova_linha)
     return pd.DataFrame(linhas_expandidas)
 
-
 def encontrar_cabecalho(df):
     for idx, row in df.iterrows():
         if row.astype(str).str.contains(r"des[çc]rição", case=False, regex=True).any():
             return idx
     return None
-
 
 def ler_tabelas(pdf_path):
     try:
@@ -230,7 +206,6 @@ def ler_tabelas(pdf_path):
     except Exception as e:
         st.error(f"Erro ao ler tabelas: {e}")
         return []
-
 
 def ajustar_descontos_uma_pagina(df):
     discount_values = []
@@ -257,7 +232,6 @@ def ajustar_descontos_uma_pagina(df):
             df.at[i, "DESCONTOS"] = ""
     return df
 
-
 def ajustar_descontos_por_pagina(df):
     if "PAGINA" not in df.columns:
         return df
@@ -270,7 +244,6 @@ def ajustar_descontos_por_pagina(df):
     if not paginas_processadas:
         return df
     return pd.concat(paginas_processadas, ignore_index=True)
-
 
 def processar_contracheque(pdf_path):
     colunas_desejadas = ["COD", "DESCRIÇÃO", "GANHOS", "DESCONTOS"]
@@ -302,9 +275,8 @@ def processar_contracheque(pdf_path):
     dados_finais = ajustar_descontos_por_pagina(dados_finais)
     return dados_finais
 
-
 ###############################################################################
-#   FUNÇÃO DE GERAÇÃO DE PDF (formatação PT-BR)
+# Funções para Geração de PDF e DOCX (mantidas inalteradas)
 ###############################################################################
 def formatar_valor_brl(us_string: str) -> str:
     try:
@@ -312,7 +284,6 @@ def formatar_valor_brl(us_string: str) -> str:
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return us_string
-
 
 class PDFRelatorio(FPDF):
     def __init__(self, titulo, colunas, dados, linhas_especiais=False):
@@ -371,9 +342,9 @@ class PDFRelatorio(FPDF):
         self.montar_tabela()
         self.output(nome_arquivo)
 
-
 def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list,
-                  inserir_totais=False, col_valor_soma="DESCONTOS", linhas_especiais=False) -> bytes:
+                  inserir_totais=False, col_valor_soma="DESCONTOS",
+                  linhas_especiais=False) -> bytes:
     for col_def in colunas_def:
         if col_def["nome"] not in dados.columns:
             dados[col_def["nome"]] = ""
@@ -389,9 +360,8 @@ def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list,
     os.remove(tmp_path)
     return pdf_bytes
 
-
 ###############################################################################
-#    GERAÇÃO DE DOCX (em duas etapas)
+# GERAÇÃO DE DOCX (mantida inalterada)
 ###############################################################################
 def to_en_us_string(val):
     try:
@@ -400,8 +370,8 @@ def to_en_us_string(val):
     except:
         return str(val)
 
-
-def df_to_docx_bytes(dados: pd.DataFrame, titulo: str, inserir_totais=False, col_valor_soma="DESCONTOS") -> bytes:
+def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
+                     inserir_totais=False, col_valor_soma="DESCONTOS") -> bytes:
     df_final = dados.copy()
     if inserir_totais:
         df_final = inserir_totais_na_coluna(df_final, col_valor_soma)
@@ -467,9 +437,8 @@ def df_to_docx_bytes(dados: pd.DataFrame, titulo: str, inserir_totais=False, col
     document.save(buf)
     return buf.getvalue()
 
-
 ###############################################################################
-#   Ajuste final de valores no DOCX para PT-BR
+# Ajuste final de valores no DOCX para PT-BR
 ###############################################################################
 def formatar_valor_brl(valor):
     try:
@@ -477,7 +446,6 @@ def formatar_valor_brl(valor):
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return str(valor)
-
 
 def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_in:
@@ -501,25 +469,43 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
     os.remove(output_path)
     return final_bytes
 
+###############################################################################
+# Função para cruzar o extrato de descontos com a lista de rubricas
+###############################################################################
+def cruzar_descontos_com_rubricas(df_descontos, glossary, threshold=85):
+    """
+    Retorna as linhas de df_descontos cuja coluna "DESCRIÇÃO" apresente
+    similaridade (usando fuzzy matching com fuzz.ratio) maior ou igual ao limiar
+    com algum dos termos do glossário.
+    """
+    if df_descontos.empty or not glossary:
+        return pd.DataFrame()
+    unique_desc = df_descontos["DESCRIÇÃO"].unique()
+    mapping = {}
+    for desc in unique_desc:
+        result = process.extractOne(desc, glossary, scorer=fuzz.ratio)
+        mapping[desc] = (result is not None and result[1] >= threshold)
+    mask = df_descontos["DESCRIÇÃO"].map(mapping)
+    return df_descontos[mask]
 
 ###############################################################################
-#     APLICAÇÃO STREAMLIT (MAIN)
+# APLICAÇÃO STREAMLIT (MAIN)
 ###############################################################################
 def main():
     # Exibir logomarca
     logo_base64 = get_image_base64(LOGO_PATH)
     if logo_base64:
-        st.markdown(
-            f"""
+        st.markdown(f"""
             <div style="text-align: center; margin-bottom: 20px;">
                 <img src="data:image/png;base64,{logo_base64}" alt="Logomarca" style="width: 300px;">
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            """, unsafe_allow_html=True)
+
     st.title("Analista de Contracheques")
-    # Carregar glossário
+
+    # Carregar glossário (lista de Rubricas) – será utilizado no item 2.1 e 3
     glossary_terms = carregar_glossario(GLOSSARY_PATH)
+
     # Upload do PDF
     uploaded_pdf = st.file_uploader("Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
     if uploaded_pdf is not None:
@@ -535,13 +521,16 @@ def main():
             set_state_value("df_completo", df)
         else:
             st.warning("Não foi possível extrair as informações do PDF ou o arquivo está vazio.")
+
     df_completo = get_state_value("df_completo")
     nome_cli_sanit = sanitizar_para_arquivo(get_state_value("nome_cliente") or "ND")
     matr_sanit = sanitizar_para_arquivo(get_state_value("matricula") or "ND")
+
     if df_completo is not None and not df_completo.empty:
         st.markdown("### DataFrame do Contracheque Completo")
         st.dataframe(df_completo, use_container_width=True)
-        # PDF Completo
+
+        # Item 1: PDF Completo
         titulo_completo = f"Relatório de Contracheque (Completo) - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
         colunas_pdf_completo = [
             {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -566,7 +555,9 @@ def main():
             file_name=pdf_filename_completo,
             mime="application/pdf"
         )
+
         st.markdown("## Análise de Descontos")
+
         with st.form("form_filtrar_descontos"):
             st.markdown("### 1) Filtrar Operações de Descontos")
             submit_desc = st.form_submit_button("Filtrar Descontos")
@@ -575,10 +566,13 @@ def main():
             df_desc = df_desc[df_desc["DESCONTOS"].str.strip() != ""]
             df_desc.reset_index(drop=True, inplace=True)
             set_state_value("df_descontos", df_desc)
+
         df_descontos = get_state_value("df_descontos")
         if df_descontos is not None and not df_descontos.empty:
             st.markdown("### 2) Extrato de Descontos")
             st.dataframe(df_descontos, use_container_width=True)
+
+            # Botão de Baixar PDF (Descontos) logo abaixo do extrato
             titulo_desc = f"Contracheque - Descontos - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
             colunas_pdf_desc = [
                 {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -602,16 +596,25 @@ def main():
                 file_name=pdf_filename_desc,
                 mime="application/pdf"
             )
+
+            # Item 2.1: Lista das Rubricas (exibição do conteúdo do arquivo rubricas.txt)
+            st.markdown("### 2.1) Lista das Rubricas")
+            df_rubricas = pd.DataFrame({"Rubricas": glossary_terms})
+            st.dataframe(df_rubricas, use_container_width=True)
+
+            # Item 3: Cruzar os dados de Descontos com as Rubricas para Filtrar
             with st.form("form_filtro_gloss"):
                 st.markdown("### 3) Filtrar Descontos no Glossário (Precisão Ajustável)")
                 thresh = st.slider("Nível de Similaridade (0.5 a 1.0)", 0.5, 1.0, 0.85, 0.05)
-                submit_gloss = st.form_submit_button("Descontos no Glossário")
+                submit_gloss = st.form_submit_button("Filtrar com Rubricas")
             if submit_gloss:
-                with st.spinner("Filtrando descontos no glossário..."):
-                    # Usamos a versão vetorizada para acelerar o processamento
-                    df_desc_gloss = filtrar_por_glossario_vectorized(df_descontos, glossary_terms, "DESCRIÇÃO", int(thresh * 100))
+                with st.spinner("Cruzando Extrato de Descontos com a Lista das Rubricas..."):
+                    # Converte o limiar para escala de 0 a 100
+                    threshold_value = int(thresh * 100)
+                    df_desc_gloss = cruzar_descontos_com_rubricas(df_descontos, glossary_terms, threshold_value)
                 set_state_value("df_descontos_gloss", df_desc_gloss)
                 set_state_value("df_descontos_gloss_sel", None)
+
         df_descontos_gloss = get_state_value("df_descontos_gloss")
         if df_descontos_gloss is not None and not df_descontos_gloss.empty:
             st.markdown("#### Descontos x Glossário")
@@ -709,7 +712,6 @@ def main():
                         file_name=docx_filename_finais,
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
-
 
 if __name__ == "__main__":
     main()
