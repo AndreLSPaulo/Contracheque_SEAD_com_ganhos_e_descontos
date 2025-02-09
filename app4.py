@@ -29,11 +29,13 @@ _fallback_state = {
     "matricula": None,
 }
 
+
 def get_state_value(key):
     try:
         return st.session_state[key]
     except:
         return _fallback_state.get(key, None)
+
 
 def set_state_value(key, value):
     try:
@@ -41,13 +43,15 @@ def set_state_value(key, value):
     except:
         _fallback_state[key] = value
 
+
 ###############################################################################
 # CONFIGURAÇÃO INICIAL DO STREAMLIT
 ###############################################################################
 st.set_page_config(page_title="Analista de Contracheques", layout="centered")
 
-LOGO_PATH = "MP.png"        # Caminho para a logomarca
+LOGO_PATH = "MP.png"  # Caminho para a logomarca
 GLOSSARY_PATH = "Rubricas.txt"  # Nome do arquivo de Glossário (Rubricas.txt)
+
 
 ###############################################################################
 # FUNÇÃO PARA SANITIZAR STRINGS (NOME, MATRICULA)
@@ -57,6 +61,7 @@ def sanitizar_para_arquivo(texto: str) -> str:
     texto = texto.replace(" ", "_")
     texto = re.sub(r"[^\w\-_\.]", "", texto, flags=re.UNICODE)
     return texto
+
 
 ###############################################################################
 # FUNÇÃO PARA EXTRAIR NOME E MATRÍCULA (do PDF – não exibidos)
@@ -84,6 +89,7 @@ def extrair_nome_e_matricula(pdf_path):
                             matricula = matr_match.group(1).strip()
     return nome or "N/D", matricula or "N/D"
 
+
 ###############################################################################
 # FUNÇÃO PARA LIMPAR VALOR
 ###############################################################################
@@ -94,6 +100,7 @@ def limpar_valor(valor):
         if match_val:
             return match_val.group(0)
     return valor
+
 
 ###############################################################################
 # FUNÇÃO AUXILIAR PARA INSERIR LINHAS DE TOTAL / EM DOBRO
@@ -114,8 +121,10 @@ def inserir_totais_na_coluna(df, col_valor):
         return df
 
     df_novo = df.copy()
+
     def en_us_format(number: float) -> str:
         return f"{number:,.2f}"
+
     total_str = en_us_format(soma)
     dobro_str = en_us_format(2 * soma)
 
@@ -135,6 +144,7 @@ def inserir_totais_na_coluna(df, col_valor):
         df_novo.loc[mask_especial, "COD"] = ""
     return df_novo
 
+
 ###############################################################################
 # FUNÇÕES GERAIS DE SUPORTE (Glossário e Imagens)
 ###############################################################################
@@ -144,7 +154,8 @@ def get_image_base64(file_path):
     with open(file_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode()
 
-# Utiliza o diretório atual para compor o caminho do arquivo Rubricas.txt
+
+# Utiliza o diretório atual para compor o caminho completo para Rubricas.txt
 def carregar_glossario(path):
     try:
         full_path = os.path.join(os.getcwd(), path)
@@ -153,6 +164,7 @@ def carregar_glossario(path):
     except Exception as e:
         st.error(f"Erro ao carregar glossário: {e}")
         return []
+
 
 ###############################################################################
 # EXTRAÇÃO DE TABELAS (CONTRACHEQUE) VIA CAMELOT
@@ -171,6 +183,7 @@ def extrair_data_da_pagina(pdf_path, page_number):
         pass
     return "N/D"
 
+
 def _separar_linhas_multiplas(df: pd.DataFrame) -> pd.DataFrame:
     linhas_expandidas = []
     for _, row in df.iterrows():
@@ -184,11 +197,13 @@ def _separar_linhas_multiplas(df: pd.DataFrame) -> pd.DataFrame:
             linhas_expandidas.append(nova_linha)
     return pd.DataFrame(linhas_expandidas)
 
+
 def encontrar_cabecalho(df):
     for idx, row in df.iterrows():
         if row.astype(str).str.contains(r"des[çc]rição", case=False, regex=True).any():
             return idx
     return None
+
 
 def ler_tabelas(pdf_path):
     try:
@@ -210,6 +225,7 @@ def ler_tabelas(pdf_path):
     except Exception as e:
         st.error(f"Erro ao ler tabelas: {e}")
         return []
+
 
 def ajustar_descontos_uma_pagina(df):
     discount_values = []
@@ -236,6 +252,7 @@ def ajustar_descontos_uma_pagina(df):
             df.at[i, "DESCONTOS"] = ""
     return df
 
+
 def ajustar_descontos_por_pagina(df):
     if "PAGINA" not in df.columns:
         return df
@@ -248,6 +265,7 @@ def ajustar_descontos_por_pagina(df):
     if not paginas_processadas:
         return df
     return pd.concat(paginas_processadas, ignore_index=True)
+
 
 def processar_contracheque(pdf_path):
     colunas_desejadas = ["COD", "DESCRIÇÃO", "GANHOS", "DESCONTOS"]
@@ -279,6 +297,7 @@ def processar_contracheque(pdf_path):
     dados_finais = ajustar_descontos_por_pagina(dados_finais)
     return dados_finais
 
+
 ###############################################################################
 # FUNÇÕES PARA GERAÇÃO DE PDF E DOCX (mantidas inalteradas)
 ###############################################################################
@@ -288,6 +307,7 @@ def formatar_valor_brl(us_string: str) -> str:
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return us_string
+
 
 class PDFRelatorio(FPDF):
     def __init__(self, titulo, colunas, dados, linhas_especiais=False):
@@ -346,6 +366,7 @@ class PDFRelatorio(FPDF):
         self.montar_tabela()
         self.output(nome_arquivo)
 
+
 def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list,
                   inserir_totais=False, col_valor_soma="DESCONTOS",
                   linhas_especiais=False) -> bytes:
@@ -364,12 +385,14 @@ def salvar_em_pdf(dados: pd.DataFrame, titulo_pdf: str, colunas_def: list,
     os.remove(tmp_path)
     return pdf_bytes
 
+
 def to_en_us_string(val):
     try:
         f = float(str(val).replace(",", "."))
         return "{:,.2f}".format(f)
     except:
         return str(val)
+
 
 def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
                      inserir_totais=False, col_valor_soma="DESCONTOS") -> bytes:
@@ -438,6 +461,7 @@ def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
     document.save(buf)
     return buf.getvalue()
 
+
 ###############################################################################
 # Ajuste final de valores no DOCX para PT-BR
 ###############################################################################
@@ -447,6 +471,7 @@ def formatar_valor_brl(valor):
         return f"{f:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except:
         return str(valor)
+
 
 def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_in:
@@ -470,6 +495,7 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
     os.remove(output_path)
     return final_bytes
 
+
 ###############################################################################
 # Função para cruzar o Extrato de Descontos com a Lista de Rubricas
 ###############################################################################
@@ -488,6 +514,7 @@ def cruzar_descontos_com_rubricas(df_descontos, glossary, threshold=85):
         mapping[desc] = (result is not None and result[1] >= threshold)
     mask = df_descontos["DESCRIÇÃO"].map(mapping)
     return df_descontos[mask]
+
 
 ###############################################################################
 # APLICAÇÃO STREAMLIT (MAIN)
@@ -508,7 +535,8 @@ def main():
     glossary_terms = carregar_glossario(GLOSSARY_PATH)
 
     # Upload do PDF
-    uploaded_pdf = st.file_uploader("Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
+    uploaded_pdf = st.file_uploader(
+        "Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
     if uploaded_pdf is not None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(uploaded_pdf.read())
@@ -597,16 +625,17 @@ def main():
                 file_name=pdf_filename_desc,
                 mime="application/pdf"
             )
-            
-            # Item 2.1: Lista das Rubricas (exibição do conteúdo do arquivo Rubricas.txt)
+
+            # Item 2.1: Lista das Rubricas (conteúdo do arquivo Rubricas.txt)
             st.markdown("### 2.1) Lista das Rubricas")
             df_rubricas = pd.DataFrame({"Rubricas": glossary_terms})
             st.dataframe(df_rubricas, use_container_width=True)
-            
+
             # Item 3: Cruzamento entre Extrato de Descontos e Rubricas
             with st.form("form_filtro_gloss"):
                 st.markdown("### 3) Filtrar Descontos no Glossário (Precisão Ajustável)")
-                thresh = st.slider("Nível de Similaridade (0.5 a 1.0)", 0.5, 1.0, 0.85, 0.05)
+                # Agora o slider varia de 0.1 a 1.0, com passos de 0.1
+                thresh = st.slider("Nível de Similaridade (0.1 a 1.0)", 0.1, 1.0, 0.85, 0.1)
                 submit_gloss = st.form_submit_button("Filtrar com Rubricas")
             if submit_gloss:
                 with st.spinner("Cruzando Extrato de Descontos com a Lista das Rubricas..."):
@@ -614,7 +643,7 @@ def main():
                     df_desc_gloss = cruzar_descontos_com_rubricas(df_descontos, glossary_terms, threshold_value)
                 set_state_value("df_descontos_gloss", df_desc_gloss)
                 set_state_value("df_descontos_gloss_sel", None)
-                
+
         df_descontos_gloss = get_state_value("df_descontos_gloss")
         if df_descontos_gloss is not None and not df_descontos_gloss.empty:
             st.markdown("#### Descontos x Glossário")
@@ -713,6 +742,6 @@ def main():
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
 
+
 if __name__ == "__main__":
     main()
-
