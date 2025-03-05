@@ -27,6 +27,8 @@ _fallback_state = {
     "df_descontos_gloss_sel": None,
     "nome_cliente": None,
     "matricula": None,
+    # Inserido para suportar valor B no cálculo de indébito:
+    "valor_recebido": ""
 }
 
 
@@ -103,9 +105,24 @@ def limpar_valor(valor):
 
 
 ###############################################################################
-# FUNÇÃO AUXILIAR PARA INSERIR LINHAS DE TOTAL / EM DOBRO
+# (1) ALTERAÇÃO DA FUNÇÃO DE INSERIR TOTAIS
+#    AGORA COM 4 LINHAS:
+#      A = Valor Total (R$)
+#      B = Valor Recebido - Autor (a)
+#      Indébito (A-B)
+#      Indébito em dobro (R$)
 ###############################################################################
 def inserir_totais_na_coluna(df, col_valor):
+    """
+    Antiga lógica: inseria "Valor Total (R$)" e "Em dobro (R$)".
+    Agora insere 4 linhas:
+      - A = Valor Total (R$)
+      - B = Valor Recebido - Autor (a)
+      - Indébito (A-B)
+      - Indébito em dobro (R$)
+
+    O valor B é recuperado da variável "valor_recebido" (session_state ou fallback).
+    """
     if col_valor not in df.columns:
         return df
 
@@ -115,33 +132,65 @@ def inserir_totais_na_coluna(df, col_valor):
         except:
             return 0.0
 
-    vals = df[col_valor].apply(_to_float)
-    soma = vals.sum()
+    # Soma (A)
+    soma = df[col_valor].apply(_to_float).sum()
     if soma == 0:
         return df
 
     df_novo = df.copy()
 
+    # Recupera o valor B do estado
+    valor_b_str = get_state_value("valor_recebido") or "0"
+    try:
+        valor_b_num = float(str(valor_b_str).replace(',', '.').strip())
+    except:
+        valor_b_num = 0.0
+
+    # Calcula indebito e indebito em dobro
+    indebito = soma - valor_b_num
+    indebito_dobro = 2 * indebito
+
     def en_us_format(number: float) -> str:
         return f"{number:,.2f}"
 
-    total_str = en_us_format(soma)
-    dobro_str = en_us_format(2 * soma)
+    A_str = en_us_format(soma)
+    B_str = valor_b_str.strip()
+    indebito_str = en_us_format(indebito)
+    indebito_dobro_str = en_us_format(indebito_dobro)
 
+    # Linha A
     df_novo = pd.concat([
         df_novo,
-        pd.DataFrame({col_valor: [total_str], "DESCRIÇÃO": ["Valor Total (R$)"]})
+        pd.DataFrame({col_valor: [A_str], "DESCRIÇÃO": ["A = Valor Total (R$)"]})
     ], ignore_index=True)
+    # Linha B
     df_novo = pd.concat([
         df_novo,
-        pd.DataFrame({col_valor: [dobro_str], "DESCRIÇÃO": ["Em dobro (R$)"]})
+        pd.DataFrame({col_valor: [B_str], "DESCRIÇÃO": ["B = Valor Recebido - Autor (a)"]})
+    ], ignore_index=True)
+    # Indébito (A-B)
+    df_novo = pd.concat([
+        df_novo,
+        pd.DataFrame({col_valor: [indebito_str], "DESCRIÇÃO": ["Indébito (A-B)"]})
+    ], ignore_index=True)
+    # Indébito em dobro
+    df_novo = pd.concat([
+        df_novo,
+        pd.DataFrame({col_valor: [indebito_dobro_str], "DESCRIÇÃO": ["Indébito em dobro (R$)"]})
     ], ignore_index=True)
 
-    mask_especial = df_novo["DESCRIÇÃO"].isin(["Valor Total (R$)", "Em dobro (R$)"])
+    linhas_especiais = [
+        "A = Valor Total (R$)",
+        "B = Valor Recebido - Autor (a)",
+        "Indébito (A-B)",
+        "Indébito em dobro (R$)"
+    ]
+    mask_especial = df_novo["DESCRIÇÃO"].isin(linhas_especiais)
     if "DATA" in df_novo.columns:
         df_novo.loc[mask_especial, "DATA"] = ""
     if "COD" in df_novo.columns:
         df_novo.loc[mask_especial, "COD"] = ""
+
     return df_novo
 
 
@@ -171,7 +220,6 @@ def carregar_glossario(path):
 ###############################################################################
 def extrair_data_da_pagina(pdf_path, page_number):
     try:
-        from PyPDF2 import PdfReader
         with open(pdf_path, 'rb') as f:
             reader = PdfReader(f)
             if page_number - 1 < len(reader.pages):
@@ -234,8 +282,8 @@ def ajustar_descontos_uma_pagina(df):
         if d_val and d_val != "-":
             discount_values.append(d_val)
     last_ganhos_index = -1
-    for i, row in df.iterrows():
-        g_val = str(row["GANHOS"]).strip()
+    for i, row in enumerate(df.iterrows()):
+        g_val = str(df.at[i, "GANHOS"]).strip()
         if g_val and g_val != "-" and re.search(r"\d", g_val):
             last_ganhos_index = i
         else:
@@ -299,7 +347,8 @@ def processar_contracheque(pdf_path):
 
 
 ###############################################################################
-# FUNÇÕES PARA GERAÇÃO DE PDF E DOCX (mantidas inalteradas)
+# FUNÇÕES PARA GERAÇÃO DE PDF E DOCX (mantidas inalteradas, exceto pela
+# chamada a inserir_totais_na_coluna que agora gera as 4 linhas solicitadas)
 ###############################################################################
 def formatar_valor_brl(us_string: str) -> str:
     try:
@@ -342,14 +391,24 @@ class PDFRelatorio(FPDF):
         for _, row in self.dados.iterrows():
             if self.get_y() + row_height + 15 > self.h:
                 self.add_page()
+
             descricao = str(row.get("DESCRIÇÃO", ""))
-            is_especial = descricao in ["Valor Total (R$)", "Em dobro (R$)"]
+            # Ajustamos para as novas linhas especiais
+            linhas_quentes = [
+                "A = Valor Total (R$)",
+                "B = Valor Recebido - Autor (a)",
+                "Indébito (A-B)",
+                "Indébito em dobro (R$)"
+            ]
+            is_especial = (descricao in linhas_quentes)
+
             if is_especial and self.linhas_especiais:
                 self.set_font("Arial", "B", 11)
                 self.set_text_color(255, 0, 0)
             else:
                 self.set_font("Arial", "", 9)
                 self.set_text_color(0, 0, 0)
+
             for col in self.colunas:
                 col_name = col["nome"]
                 valor = str(row.get(col_name, ""))
@@ -357,6 +416,7 @@ class PDFRelatorio(FPDF):
                     valor = formatar_valor_brl(valor)
                 self.cell(col["largura"], row_height, valor, border=1, align=col["alinhamento"])
             self.ln(row_height)
+
             if is_especial and self.linhas_especiais:
                 self.set_font("Arial", "", 9)
                 self.set_text_color(0, 0, 0)
@@ -413,6 +473,7 @@ def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
         buf = BytesIO()
         document.save(buf)
         return buf.getvalue()
+
     colunas = df_final.columns.tolist()
     table = document.add_table(rows=1, cols=len(colunas))
     table.style = 'Table Grid'
@@ -422,6 +483,7 @@ def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
         for paragraph in hdr_cells[i].paragraphs:
             for run in paragraph.runs:
                 run.font.bold = True
+
     width_map = {}
     if "COD" in colunas:
         width_map["COD"] = 20
@@ -435,9 +497,18 @@ def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
         width_map["PAGINA"] = 20
     if "DATA" in colunas:
         width_map["DATA"] = 30
+
+    # Linhas da Tabela
+    linhas_quentes = [
+        "A = Valor Total (R$)",
+        "B = Valor Recebido - Autor (a)",
+        "Indébito (A-B)",
+        "Indébito em dobro (R$)"
+    ]
     for _, row in df_final.iterrows():
         descricao = str(row.get("DESCRIÇÃO", ""))
-        is_especial = descricao in ["Valor Total (R$)", "Em dobro (R$)"]
+        is_especial = (descricao in linhas_quentes)
+
         row_cells = table.add_row().cells
         for i, col_name in enumerate(colunas):
             valor = str(row[col_name])
@@ -454,17 +525,16 @@ def df_to_docx_bytes(dados: pd.DataFrame, titulo: str,
                 run.font.bold = True
                 run.font.size = Pt(11)
                 run.font.color.rgb = RGBColor(255, 0, 0)
+
     for i, col_name in enumerate(colunas):
         mm = width_map.get(col_name, 25)
         table.columns[i].width = Inches(mm / 25.4)
+
     buf = BytesIO()
     document.save(buf)
     return buf.getvalue()
 
 
-###############################################################################
-# Ajuste final de valores no DOCX para PT-BR
-###############################################################################
 def formatar_valor_brl(valor):
     try:
         f = float(str(valor).replace(",", "").replace(".", "")) / 100
@@ -500,11 +570,6 @@ def ajustar_valores_docx(file_input_bytes: bytes) -> bytes:
 # Função para cruzar o Extrato de Descontos com a Lista de Rubricas
 ###############################################################################
 def cruzar_descontos_com_rubricas(df_descontos, glossary, threshold=85):
-    """
-    Retorna as linhas de df_descontos cuja coluna "DESCRIÇÃO" apresenta
-    similaridade (usando fuzzy matching com fuzz.ratio) maior ou igual ao limiar
-    com algum dos termos da lista de Rubricas.
-    """
     if df_descontos.empty or not glossary:
         return pd.DataFrame()
     unique_desc = df_descontos["DESCRIÇÃO"].unique()
@@ -536,14 +601,18 @@ def main():
 
     # Upload do PDF
     uploaded_pdf = st.file_uploader(
-        "Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)", type="pdf")
+        "Clique no botão para enviar o arquivo PDF (Contracheque) - SEAD (com colunas GANHOS e DESCONTOS)",
+        type="pdf"
+    )
     if uploaded_pdf is not None:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(uploaded_pdf.read())
             caminho_temp = tmp.name
+
         nome_cli, matr = extrair_nome_e_matricula(caminho_temp)
         set_state_value("nome_cliente", nome_cli)
         set_state_value("matricula", matr)
+
         df = processar_contracheque(caminho_temp)
         os.unlink(caminho_temp)
         if not df.empty:
@@ -587,6 +656,7 @@ def main():
 
         st.markdown("## Análise de Descontos")
 
+        # Form para filtrar Descontos
         with st.form("form_filtrar_descontos"):
             st.markdown("### 1) Filtrar Operações de Descontos")
             submit_desc = st.form_submit_button("Filtrar Descontos")
@@ -601,7 +671,7 @@ def main():
             st.markdown("### 2) Extrato de Descontos")
             st.dataframe(df_descontos, use_container_width=True)
 
-            # Botão de Baixar PDF (Descontos) logo abaixo do extrato
+            # Botão de Baixar PDF (Descontos)
             titulo_desc = f"Contracheque - Descontos - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
             colunas_pdf_desc = [
                 {"nome": "COD", "largura": 20, "alinhamento": "C"},
@@ -626,15 +696,14 @@ def main():
                 mime="application/pdf"
             )
 
-            # Item 2.1: Lista das Rubricas (conteúdo do arquivo Rubricas.txt)
+            # (2.1) Lista das Rubricas
             st.markdown("### 2.1) Lista das Rubricas")
             df_rubricas = pd.DataFrame({"Rubricas": glossary_terms})
             st.dataframe(df_rubricas, use_container_width=True)
 
-            # Item 3: Cruzamento entre Extrato de Descontos e Rubricas
+            # (3) Cruzamento entre Extrato de Descontos e Rubricas
             with st.form("form_filtro_gloss"):
                 st.markdown("### 3) Filtrar Descontos no Glossário (Precisão Ajustável)")
-                # Agora o slider varia de 0.1 a 1.0, com passos de 0.1
                 thresh = st.slider("Nível de Similaridade (0.1 a 1.0)", 0.1, 1.0, 0.85, 0.1)
                 submit_gloss = st.form_submit_button("Filtrar com Rubricas")
             if submit_gloss:
@@ -671,6 +740,8 @@ def main():
                 file_name=pdf_filename_gloss,
                 mime="application/pdf"
             )
+
+            # (4) Lista única de Descontos
             df_gloss_origem = df_descontos_gloss
             df_sel = get_state_value("df_descontos_gloss_sel")
             if df_sel is None or df_sel.empty:
@@ -686,6 +757,7 @@ def main():
                     if st.checkbox(label_str, key=f"chk_{i}"):
                         selected_descr.append(val)
                 incluir_btn = st.form_submit_button("Confirmar Inclusão (Descontos)")
+
             if incluir_btn:
                 if selected_descr:
                     df_incluido = df_sel[df_sel["DESCRIÇÃO"].isin(selected_descr)].copy()
@@ -695,17 +767,72 @@ def main():
                     st.dataframe(df_incluido, use_container_width=True)
                 else:
                     st.warning("Nenhuma descrição selecionada.")
+
+            # (5) APRESENTAR RÚBRICAS PARA DÉBITOS (DESCONTOS FINAIS)
             df_final_sel = get_state_value("df_descontos_gloss_sel")
             if df_final_sel is not None and not df_final_sel.empty:
+                ######################################################################
+                # INSERINDO A ETAPA "Apresentar Rúbricas para Débitos (Descontos Finais)"
+                # COM OS CAMPOS:
+                #    A = Valor Total (R$)
+                #    B = Valor Recebido - Autor (a)
+                #    Indébito (A-B)
+                #    Indébito em dobro (R$)
+                ######################################################################
+
+                st.markdown("### 5) Apresentar Rúbricas para Débitos (Descontos Finais)")
+
+                # Cópia e ordenação cronológica
+                df_final = df_final_sel.copy()
+                df_final["PAGINA"] = pd.to_numeric(df_final["PAGINA"], errors='coerce').fillna(0)
+                df_final = df_final.sort_values(by=["DATA", "PAGINA"]).reset_index(drop=True)
+                df_final = df_final[["COD", "DESCRIÇÃO", "DESCONTOS", "DATA"]]
+
+                # Cálculo de A (soma dos descontos)
+                def _to_float(x):
+                    try:
+                        return float(str(x).replace(',', '.').strip())
+                    except:
+                        return 0.0
+
+                A_val = df_final["DESCONTOS"].apply(_to_float).sum()
+                A_str = f"{A_val:,.2f}"
+
+                st.write(f"A = Valor Total (R$): {A_str}")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    valor_b_receb = st.text_input("B = Valor Recebido - Autor (a)", "0")
+                try:
+                    vrnum = float(valor_b_receb.replace(',', '.').strip())
+                except:
+                    vrnum = 0.0
+
+                indebito = A_val - vrnum
+                indebito_dobro = 2 * indebito
+                indebito_str = f"{indebito:,.2f}"
+                indebito_dobro_str = f"{indebito_dobro:,.2f}"
+
+                with col2:
+                    st.write(f"Indébito (A-B): {indebito_str}")
+                    st.write(f"Indébito em dobro (R$): {indebito_dobro_str}")
+
+                # Armazena "valor_recebido" no estado
+                set_state_value("valor_recebido", valor_b_receb)
+
                 with st.form("form_descontos_finais"):
-                    st.markdown("### 5) Apresentar Rúbricas para Débitos (Descontos Finais)")
                     submit_final = st.form_submit_button("Gerar Relatório Final de Descontos")
+
                 if submit_final:
-                    df_final = df_final_sel.copy()
-                    df_final["PAGINA"] = pd.to_numeric(df_final["PAGINA"], errors='coerce').fillna(0)
-                    df_final = df_final.sort_values(by=["DATA", "PAGINA"]).reset_index(drop=True)
-                    df_final = df_final[["COD", "DESCRIÇÃO", "DESCONTOS", "DATA"]]
-                    titulo_final = f"Descontos Finais (Cronológico) - {get_state_value('nome_cliente')} / {get_state_value('matricula')}"
+                    # Monta Título final
+                    nome = get_state_value("nome_cliente") or "ND"
+                    matr_ = get_state_value("matricula") or "ND"
+                    titulo_final = f"Descontos Finais (Cronológico) - {nome} / {matr_}"
+
+                    # Insere 4 linhas especiais (A, B, Indébito, Indébito em dobro)
+                    df_com_totais = inserir_totais_na_coluna(df_final.copy(), "DESCONTOS")
+
+                    # Gera PDF final
                     colunas_pdf_finais = [
                         {"nome": "COD", "largura": 20, "alinhamento": "C"},
                         {"nome": "DESCRIÇÃO", "largura": 180, "alinhamento": "L"},
@@ -713,12 +840,12 @@ def main():
                         {"nome": "DATA", "largura": 30, "alinhamento": "C"},
                     ]
                     pdf_data_finais = salvar_em_pdf(
-                        dados=df_final.copy(),
+                        dados=df_com_totais,
                         titulo_pdf=titulo_final,
                         colunas_def=colunas_pdf_finais,
-                        inserir_totais=True,
+                        inserir_totais=False,     # Já inserimos manualmente
                         col_valor_soma="DESCONTOS",
-                        linhas_especiais=True
+                        linhas_especiais=True     # Destaca as 4 linhas
                     )
                     pdf_filename_finais = f"contracheque_descontos_finais_{nome_cli_sanit}_{matr_sanit}.pdf"
                     st.download_button(
@@ -727,10 +854,12 @@ def main():
                         file_name=pdf_filename_finais,
                         mime="application/pdf"
                     )
+
+                    # Gera DOCX final
                     docx_bytes = df_to_docx_bytes(
-                        dados=df_final.copy(),
+                        dados=df_final.copy(),    # note: gera sem tot, mas passamos "inserir_totais=True"
                         titulo=titulo_final,
-                        inserir_totais=True,
+                        inserir_totais=True,      # inc. A, B, Indébito, Indébito em dobro
                         col_valor_soma="DESCONTOS"
                     )
                     docx_bytes_corrigido = ajustar_valores_docx(docx_bytes)
@@ -745,3 +874,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
